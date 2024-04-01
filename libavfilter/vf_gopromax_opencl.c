@@ -59,7 +59,7 @@ static int gopromax_opencl_load(AVFilterContext *avctx,
 {
     GoProMaxOpenCLContext *ctx = avctx->priv;
     cl_int cle;
-    const char *source = ff_opencl_source_gopromax;
+    const char *source = ff_source_gopromax_cl;
     const char *kernel;
     const AVPixFmtDescriptor *gopromax_front_desc, *gopromax_rear_desc;
     int err, i, gopromax_front_planes, gopromax_rear_planes;
