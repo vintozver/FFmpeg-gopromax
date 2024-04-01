@@ -51,10 +51,10 @@ typedef struct Bs2bContext {
 
 static const AVOption bs2b_options[] = {
     { "profile", "Apply a pre-defined crossfeed level",
-            OFFSET(profile), AV_OPT_TYPE_INT, { .i64 = BS2B_DEFAULT_CLEVEL }, 0, INT_MAX, A, "profile" },
-        { "default", "default profile", 0, AV_OPT_TYPE_CONST, { .i64 = BS2B_DEFAULT_CLEVEL }, 0, 0, A, "profile" },
-        { "cmoy",    "Chu Moy circuit", 0, AV_OPT_TYPE_CONST, { .i64 = BS2B_CMOY_CLEVEL    }, 0, 0, A, "profile" },
-        { "jmeier",  "Jan Meier circuit", 0, AV_OPT_TYPE_CONST, { .i64 = BS2B_JMEIER_CLEVEL  }, 0, 0, A, "profile" },
+            OFFSET(profile), AV_OPT_TYPE_INT, { .i64 = BS2B_DEFAULT_CLEVEL }, 0, INT_MAX, A, .unit = "profile" },
+        { "default", "default profile", 0, AV_OPT_TYPE_CONST, { .i64 = BS2B_DEFAULT_CLEVEL }, 0, 0, A, .unit = "profile" },
+        { "cmoy",    "Chu Moy circuit", 0, AV_OPT_TYPE_CONST, { .i64 = BS2B_CMOY_CLEVEL    }, 0, 0, A, .unit = "profile" },
+        { "jmeier",  "Jan Meier circuit", 0, AV_OPT_TYPE_CONST, { .i64 = BS2B_JMEIER_CLEVEL  }, 0, 0, A, .unit = "profile" },
     { "fcut", "Set cut frequency (in Hz)",
             OFFSET(fcut), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, BS2B_MAXFCUT, A },
     { "feed", "Set feed level (in Hz)",
@@ -104,7 +104,7 @@ static int query_formats(AVFilterContext *ctx)
     };
     int ret;
 
-    if (ff_add_channel_layout(&layouts, AV_CH_LAYOUT_STEREO) != 0)
+    if (ff_add_channel_layout(&layouts, &(AVChannelLayout)AV_CHANNEL_LAYOUT_STEREO) != 0)
         return AVERROR(ENOMEM);
     ret = ff_set_common_channel_layouts(ctx, layouts);
     if (ret < 0)

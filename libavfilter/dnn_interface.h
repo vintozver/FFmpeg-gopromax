@@ -30,9 +30,9 @@
 #include "libavutil/frame.h"
 #include "avfilter.h"
 
-typedef enum {DNN_SUCCESS, DNN_ERROR} DNNReturnType;
+#define DNN_GENERIC_ERROR FFERRTAG('D','N','N','!')
 
-typedef enum {DNN_NATIVE, DNN_TF, DNN_OV} DNNBackendType;
+typedef enum {DNN_TF = 1, DNN_OV, DNN_TH} DNNBackendType;
 
 typedef enum {DNN_FLOAT = 1, DNN_UINT8 = 4} DNNDataType;
 
@@ -56,12 +56,21 @@ typedef enum {
     DFT_ANALYTICS_CLASSIFY, // classify for each bounding box
 }DNNFunctionType;
 
+typedef enum {
+    DL_NONE,
+    DL_NCHW,
+    DL_NHWC,
+} DNNLayout;
+
 typedef struct DNNData{
     void *data;
-    int width, height, channels;
+    int dims[4];
     // dt and order together decide the color format
     DNNDataType dt;
     DNNColorOrder order;
+    DNNLayout layout;
+    float scale;
+    float mean;
 } DNNData;
 
 typedef struct DNNExecBaseParams {
@@ -92,9 +101,9 @@ typedef struct DNNModel{
     DNNFunctionType func_type;
     // Gets model input information
     // Just reuse struct DNNData here, actually the DNNData.data field is not needed.
-    DNNReturnType (*get_input)(void *model, DNNData *input, const char *input_name);
+    int (*get_input)(void *model, DNNData *input, const char *input_name);
     // Gets model output width/height with given input w/h
-    DNNReturnType (*get_output)(void *model, const char *input_name, int input_width, int input_height,
+    int (*get_output)(void *model, const char *input_name, int input_width, int input_height,
                                 const char *output_name, int *output_width, int *output_height);
     // set the pre process to transfer data from AVFrame to DNNData
     // the default implementation within DNN is used if it is not provided by the filter
@@ -112,17 +121,32 @@ typedef struct DNNModel{
 typedef struct DNNModule{
     // Loads model and parameters from given file. Returns NULL if it is not possible.
     DNNModel *(*load_model)(const char *model_filename, DNNFunctionType func_type, const char *options, AVFilterContext *filter_ctx);
-    // Executes model with specified input and output. Returns DNN_ERROR otherwise.
-    DNNReturnType (*execute_model)(const DNNModel *model, DNNExecBaseParams *exec_params);
+    // Executes model with specified input and output. Returns the error code otherwise.
+    int (*execute_model)(const DNNModel *model, DNNExecBaseParams *exec_params);
     // Retrieve inference result.
     DNNAsyncStatusType (*get_result)(const DNNModel *model, AVFrame **in, AVFrame **out);
     // Flush all the pending tasks.
-    DNNReturnType (*flush)(const DNNModel *model);
+    int (*flush)(const DNNModel *model);
     // Frees memory allocated for model.
     void (*free_model)(DNNModel **model);
 } DNNModule;
 
 // Initializes DNNModule depending on chosen backend.
-DNNModule *ff_get_dnn_module(DNNBackendType backend_type);
+const DNNModule *ff_get_dnn_module(DNNBackendType backend_type, void *log_ctx);
+
+static inline int dnn_get_width_idx_by_layout(DNNLayout layout)
+{
+    return layout == DL_NHWC ? 2 : 3;
+}
+
+static inline int dnn_get_height_idx_by_layout(DNNLayout layout)
+{
+    return layout == DL_NHWC ? 1 : 2;
+}
+
+static inline int dnn_get_channel_idx_by_layout(DNNLayout layout)
+{
+    return layout == DL_NHWC ? 3 : 1;
+}
 
 #endif

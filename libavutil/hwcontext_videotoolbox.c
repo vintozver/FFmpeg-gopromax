@@ -34,6 +34,10 @@
 #include "pixdesc.h"
 
 typedef struct VTFramesContext {
+    /**
+     * The public AVVTFramesContext. See hwcontext_videotoolbox.h for it.
+     */
+    AVVTFramesContext p;
     CVPixelBufferPoolRef pool;
 } VTFramesContext;
 
@@ -43,8 +47,9 @@ static const struct {
     enum AVPixelFormat pix_fmt;
 } cv_pix_fmts[] = {
     { kCVPixelFormatType_420YpCbCr8Planar,              false, AV_PIX_FMT_YUV420P },
+    { kCVPixelFormatType_420YpCbCr8PlanarFullRange,     true,  AV_PIX_FMT_YUV420P },
     { kCVPixelFormatType_422YpCbCr8,                    false, AV_PIX_FMT_UYVY422 },
-    { kCVPixelFormatType_32BGRA,                        false, AV_PIX_FMT_BGRA },
+    { kCVPixelFormatType_32BGRA,                        true,  AV_PIX_FMT_BGRA },
 #ifdef kCFCoreFoundationVersionNumber10_7
     { kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,  false, AV_PIX_FMT_NV12 },
     { kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,   true,  AV_PIX_FMT_NV12 },
@@ -144,6 +149,25 @@ enum AVPixelFormat av_map_videotoolbox_format_to_pixfmt(uint32_t cv_fmt)
     return AV_PIX_FMT_NONE;
 }
 
+static uint32_t vt_format_from_pixfmt(enum AVPixelFormat pix_fmt,
+                                      enum AVColorRange range)
+{
+    for (int i = 0; i < FF_ARRAY_ELEMS(cv_pix_fmts); i++) {
+        if (cv_pix_fmts[i].pix_fmt == pix_fmt) {
+            int full_range = (range == AVCOL_RANGE_JPEG);
+
+            // Don't care if unspecified
+            if (range == AVCOL_RANGE_UNSPECIFIED)
+                return cv_pix_fmts[i].cv_fmt;
+
+            if (cv_pix_fmts[i].full_range == full_range)
+                return cv_pix_fmts[i].cv_fmt;
+        }
+    }
+
+    return 0;
+}
+
 uint32_t av_map_videotoolbox_format_from_pixfmt(enum AVPixelFormat pix_fmt)
 {
     return av_map_videotoolbox_format_from_pixfmt2(pix_fmt, false);
@@ -151,17 +175,13 @@ uint32_t av_map_videotoolbox_format_from_pixfmt(enum AVPixelFormat pix_fmt)
 
 uint32_t av_map_videotoolbox_format_from_pixfmt2(enum AVPixelFormat pix_fmt, bool full_range)
 {
-    int i;
-    for (i = 0; i < FF_ARRAY_ELEMS(cv_pix_fmts); i++) {
-        if (cv_pix_fmts[i].pix_fmt == pix_fmt && cv_pix_fmts[i].full_range == full_range)
-            return cv_pix_fmts[i].cv_fmt;
-    }
-    return 0;
+    return vt_format_from_pixfmt(pix_fmt, full_range ? AVCOL_RANGE_JPEG : AVCOL_RANGE_MPEG);
 }
 
 static int vt_pool_alloc(AVHWFramesContext *ctx)
 {
-    VTFramesContext *fctx = ctx->internal->priv;
+    VTFramesContext *fctx = ctx->hwctx;
+    AVVTFramesContext *hw_ctx = &fctx->p;
     CVReturn err;
     CFNumberRef w, h, pixfmt;
     uint32_t cv_pixfmt;
@@ -173,7 +193,7 @@ static int vt_pool_alloc(AVHWFramesContext *ctx)
         &kCFTypeDictionaryKeyCallBacks,
         &kCFTypeDictionaryValueCallBacks);
 
-    cv_pixfmt = av_map_videotoolbox_format_from_pixfmt(ctx->sw_format);
+    cv_pixfmt = vt_format_from_pixfmt(ctx->sw_format, hw_ctx->color_range);
     pixfmt = CFNumberCreate(NULL, kCFNumberSInt32Type, &cv_pixfmt);
     CFDictionarySetValue(
         attributes,
@@ -210,14 +230,41 @@ static int vt_pool_alloc(AVHWFramesContext *ctx)
     return AVERROR_EXTERNAL;
 }
 
-static AVBufferRef *vt_dummy_pool_alloc(void *opaque, size_t size)
+static void videotoolbox_buffer_release(void *opaque, uint8_t *data)
 {
-    return NULL;
+    CVPixelBufferRelease((CVPixelBufferRef)data);
+}
+
+static AVBufferRef *vt_pool_alloc_buffer(void *opaque, size_t size)
+{
+    CVPixelBufferRef pixbuf;
+    AVBufferRef *buf;
+    CVReturn err;
+    AVHWFramesContext *ctx = opaque;
+    VTFramesContext *fctx = ctx->hwctx;
+
+    err = CVPixelBufferPoolCreatePixelBuffer(
+        NULL,
+        fctx->pool,
+        &pixbuf
+    );
+    if (err != kCVReturnSuccess) {
+        av_log(ctx, AV_LOG_ERROR, "Failed to create pixel buffer from pool: %d\n", err);
+        return NULL;
+    }
+
+    buf = av_buffer_create((uint8_t *)pixbuf, size,
+                           videotoolbox_buffer_release, NULL, 0);
+    if (!buf) {
+        CVPixelBufferRelease(pixbuf);
+        return NULL;
+    }
+    return buf;
 }
 
 static void vt_frames_uninit(AVHWFramesContext *ctx)
 {
-    VTFramesContext *fctx = ctx->internal->priv;
+    VTFramesContext *fctx = ctx->hwctx;
     if (fctx->pool) {
         CVPixelBufferPoolRelease(fctx->pool);
         fctx->pool = NULL;
@@ -238,10 +285,10 @@ static int vt_frames_init(AVHWFramesContext *ctx)
         return AVERROR(ENOSYS);
     }
 
-    // create a dummy pool so av_hwframe_get_buffer doesn't EINVAL
     if (!ctx->pool) {
-        ctx->internal->pool_internal = av_buffer_pool_init2(0, ctx, vt_dummy_pool_alloc, NULL);
-        if (!ctx->internal->pool_internal)
+        ffhwframesctx(ctx)->pool_internal = av_buffer_pool_init2(
+                sizeof(CVPixelBufferRef), ctx, vt_pool_alloc_buffer, NULL);
+        if (!ffhwframesctx(ctx)->pool_internal)
             return AVERROR(ENOMEM);
     }
 
@@ -252,41 +299,11 @@ static int vt_frames_init(AVHWFramesContext *ctx)
     return 0;
 }
 
-static void videotoolbox_buffer_release(void *opaque, uint8_t *data)
-{
-    CVPixelBufferRelease((CVPixelBufferRef)data);
-}
-
 static int vt_get_buffer(AVHWFramesContext *ctx, AVFrame *frame)
 {
-    VTFramesContext *fctx = ctx->internal->priv;
-
-    if (ctx->pool && ctx->pool->size != 0) {
-        frame->buf[0] = av_buffer_pool_get(ctx->pool);
-        if (!frame->buf[0])
-            return AVERROR(ENOMEM);
-    } else {
-        CVPixelBufferRef pixbuf;
-        AVBufferRef *buf = NULL;
-        CVReturn err;
-
-        err = CVPixelBufferPoolCreatePixelBuffer(
-            NULL,
-            fctx->pool,
-            &pixbuf
-        );
-        if (err != kCVReturnSuccess) {
-            av_log(ctx, AV_LOG_ERROR, "Failed to create pixel buffer from pool: %d\n", err);
-            return AVERROR_EXTERNAL;
-        }
-
-        buf = av_buffer_create((uint8_t *)pixbuf, 1, videotoolbox_buffer_release, NULL, 0);
-        if (!buf) {
-            CVPixelBufferRelease(pixbuf);
-            return AVERROR(ENOMEM);
-        }
-        frame->buf[0] = buf;
-    }
+    frame->buf[0] = av_buffer_pool_get(ctx->pool);
+    if (!frame->buf[0])
+        return AVERROR(ENOMEM);
 
     frame->data[3] = frame->buf[0]->data;
     frame->format  = AV_PIX_FMT_VIDEOTOOLBOX;
@@ -750,7 +767,7 @@ const HWContextType ff_hwcontext_type_videotoolbox = {
     .type                 = AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
     .name                 = "videotoolbox",
 
-    .frames_priv_size     = sizeof(VTFramesContext),
+    .frames_hwctx_size    = sizeof(VTFramesContext),
 
     .device_create        = vt_device_create,
     .frames_init          = vt_frames_init,

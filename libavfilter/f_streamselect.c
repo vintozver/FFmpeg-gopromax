@@ -18,6 +18,7 @@
 
 #include "libavutil/avstring.h"
 #include "libavutil/internal.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "avfilter.h"
 #include "audio.h"
@@ -118,8 +119,7 @@ static int config_output(AVFilterLink *outlink)
         break;
     case AVMEDIA_TYPE_AUDIO:
         outlink->sample_rate    = inlink->sample_rate;
-        outlink->channels       = inlink->channels;
-        outlink->channel_layout = inlink->channel_layout;
+        outlink->ch_layout.nb_channels       = inlink->ch_layout.nb_channels;
         break;
     }
 
@@ -246,7 +246,7 @@ static int process_command(AVFilterContext *ctx, const char *cmd, const char *ar
 
         if (ret < 0)
             return ret;
-        return avfilter_config_links(ctx);
+        return ff_filter_config_links(ctx);
     }
     return AVERROR(ENOSYS);
 }

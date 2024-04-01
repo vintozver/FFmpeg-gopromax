@@ -20,10 +20,11 @@
 
 #include <string.h>
 #include "checkasm.h"
-#include "libavfilter/blend.h"
+#include "libavfilter/vf_blend_init.h"
 #include "libavutil/common.h"
 #include "libavutil/internal.h"
 #include "libavutil/intreadwrite.h"
+#include "libavutil/mem.h"
 
 #define WIDTH 256
 #define HEIGHT 256

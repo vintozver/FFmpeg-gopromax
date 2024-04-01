@@ -23,10 +23,12 @@
 #include "libavutil/avassert.h"
 #include "libavutil/channel_layout.h"
 #include "libavutil/eval.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "audio.h"
 #include "avfilter.h"
 #include "filters.h"
+#include "formats.h"
 #include "internal.h"
 
 typedef struct SineContext {
@@ -180,7 +182,7 @@ static av_cold void uninit(AVFilterContext *ctx)
 static av_cold int query_formats(AVFilterContext *ctx)
 {
     SineContext *sine = ctx->priv;
-    static const int64_t chlayouts[] = { AV_CH_LAYOUT_MONO, -1 };
+    static const AVChannelLayout chlayouts[] = { AV_CHANNEL_LAYOUT_MONO, { 0 } };
     int sample_rates[] = { sine->sample_rate, -1 };
     static const enum AVSampleFormat sample_fmts[] = { AV_SAMPLE_FMT_S16,
                                                        AV_SAMPLE_FMT_NONE };

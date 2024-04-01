@@ -24,12 +24,14 @@
  * Magic Lantern Video (MLV) demuxer
  */
 
-#include "libavutil/eval.h"
+#include <time.h>
+
 #include "libavutil/imgutils.h"
 #include "libavutil/intreadwrite.h"
+#include "libavutil/mem.h"
 #include "libavutil/rational.h"
 #include "avformat.h"
-#include "avio_internal.h"
+#include "demux.h"
 #include "internal.h"
 #include "riff.h"
 
@@ -487,11 +489,11 @@ static int read_close(AVFormatContext *s)
     return 0;
 }
 
-const AVInputFormat ff_mlv_demuxer = {
-    .name           = "mlv",
-    .long_name      = NULL_IF_CONFIG_SMALL("Magic Lantern Video (MLV)"),
+const FFInputFormat ff_mlv_demuxer = {
+    .p.name         = "mlv",
+    .p.long_name    = NULL_IF_CONFIG_SMALL("Magic Lantern Video (MLV)"),
     .priv_data_size = sizeof(MlvContext),
-    .flags_internal = FF_FMT_INIT_CLEANUP,
+    .flags_internal = FF_INFMT_FLAG_INIT_CLEANUP,
     .read_probe     = probe,
     .read_header    = read_header,
     .read_packet    = read_packet,

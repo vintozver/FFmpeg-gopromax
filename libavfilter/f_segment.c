@@ -16,18 +16,17 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#include "config_components.h"
+
 #include <stdint.h>
 
 #include "libavutil/avstring.h"
-#include "libavutil/channel_layout.h"
-#include "libavutil/common.h"
 #include "libavutil/log.h"
 #include "libavutil/mathematics.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/parseutils.h"
-#include "libavutil/samplefmt.h"
 
-#include "audio.h"
 #include "avfilter.h"
 #include "filters.h"
 #include "internal.h"
@@ -41,6 +40,7 @@ typedef struct SegmentContext {
 
     int current_point;
     int nb_points;
+    int64_t last_pts;
 
     int64_t *points;
 } SegmentContext;
@@ -186,7 +186,7 @@ static int activate(AVFilterContext *ctx)
     SegmentContext *s = ctx->priv;
     AVFrame *frame = NULL;
     int ret, status;
-    int max_samples;
+    int64_t max_samples;
     int64_t diff;
     int64_t pts;
 
@@ -200,18 +200,30 @@ static int activate(AVFilterContext *ctx)
         break;
     case AVMEDIA_TYPE_AUDIO:
         diff = s->points[s->current_point] - inlink->sample_count_out;
+        while (diff <= 0) {
+            ff_outlink_set_status(ctx->outputs[s->current_point], AVERROR_EOF, s->last_pts);
+            s->current_point++;
+            if (s->current_point >= s->nb_points)
+                return AVERROR(EINVAL);
+
+            diff = s->points[s->current_point] - inlink->sample_count_out;
+        }
         if (s->use_timestamps) {
             max_samples = av_rescale_q(diff, av_make_q(1, inlink->sample_rate), inlink->time_base);
         } else {
             max_samples = FFMAX(1, FFMIN(diff, INT_MAX));
         }
-        ret = ff_inlink_consume_samples(inlink, 1, max_samples, &frame);
+        if (max_samples <= 0 || max_samples > INT_MAX)
+            ret = ff_inlink_consume_frame(inlink, &frame);
+        else
+            ret = ff_inlink_consume_samples(inlink, 1, max_samples, &frame);
         break;
     default:
         return AVERROR_BUG;
     }
 
     if (ret > 0) {
+        s->last_pts = frame->pts;
         while (current_segment_finished(ctx, frame)) {
             ff_outlink_set_status(ctx->outputs[s->current_point], AVERROR_EOF, frame->pts);
             s->current_point++;

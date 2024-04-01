@@ -25,11 +25,10 @@
 #include "libavutil/pixdesc.h"
 #include "libavutil/samplefmt.h"
 
-#define FF_INTERNAL_FIELDS 1
-#include "libavfilter/framequeue.h"
-
 #include "libavfilter/avfilter.h"
+#include "libavfilter/avfilter_internal.h"
 #include "libavfilter/formats.h"
+#include "libavfilter/framequeue.h"
 #include "libavfilter/internal.h"
 
 static void print_formats_internal(AVFilterLink **links, const AVFilterPad *pads,
@@ -59,8 +58,7 @@ static void print_formats_internal(AVFilterLink **links, const AVFilterPad *pads
 
             for (unsigned j = 0; layouts && j < layouts->nb_channel_layouts; j++) {
                 char buf[256];
-                av_get_channel_layout_string(buf, sizeof(buf), -1,
-                                             layouts->channel_layouts[j]);
+                av_channel_layout_describe(&layouts->channel_layouts[j], buf, sizeof(buf));
                 printf("%s[%u] %s: chlayout:%s\n",
                        inout_string, i, pad_name, buf);
             }
@@ -124,7 +122,7 @@ int main(int argc, char **argv)
 
     /* create a link for each of the input pads */
     for (i = 0; i < filter_ctx->nb_inputs; i++) {
-        AVFilterLink *link = av_mallocz(sizeof(AVFilterLink));
+        AVFilterLink *link = av_mallocz(sizeof(FilterLinkInternal));
         if (!link) {
             fprintf(stderr, "Unable to allocate memory for filter input link\n");
             ret = 1;
@@ -134,7 +132,7 @@ int main(int argc, char **argv)
         filter_ctx->inputs[i] = link;
     }
     for (i = 0; i < filter_ctx->nb_outputs; i++) {
-        AVFilterLink *link = av_mallocz(sizeof(AVFilterLink));
+        AVFilterLink *link = av_mallocz(sizeof(FilterLinkInternal));
         if (!link) {
             fprintf(stderr, "Unable to allocate memory for filter output link\n");
             ret = 1;

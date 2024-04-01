@@ -24,6 +24,8 @@
  * Audio (Sidechain) Compressor filter
  */
 
+#include "config_components.h"
+
 #include "libavutil/audio_fifo.h"
 #include "libavutil/channel_layout.h"
 #include "libavutil/common.h"
@@ -73,21 +75,21 @@ typedef struct SidechainCompressContext {
 
 static const AVOption options[] = {
     { "level_in",  "set input gain",     OFFSET(level_in),  AV_OPT_TYPE_DOUBLE, {.dbl=1},        0.015625,   64, A|F|R },
-    { "mode",      "set mode",           OFFSET(mode),      AV_OPT_TYPE_INT,    {.i64=0},               0,    1, A|F|R, "mode" },
-    {   "downward",0,                    0,                 AV_OPT_TYPE_CONST,  {.i64=0},               0,    0, A|F|R, "mode" },
-    {   "upward",  0,                    0,                 AV_OPT_TYPE_CONST,  {.i64=1},               0,    0, A|F|R, "mode" },
+    { "mode",      "set mode",           OFFSET(mode),      AV_OPT_TYPE_INT,    {.i64=0},               0,    1, A|F|R, .unit = "mode" },
+    {   "downward",0,                    0,                 AV_OPT_TYPE_CONST,  {.i64=0},               0,    0, A|F|R, .unit = "mode" },
+    {   "upward",  0,                    0,                 AV_OPT_TYPE_CONST,  {.i64=1},               0,    0, A|F|R, .unit = "mode" },
     { "threshold", "set threshold",      OFFSET(threshold), AV_OPT_TYPE_DOUBLE, {.dbl=0.125}, 0.000976563,    1, A|F|R },
     { "ratio",     "set ratio",          OFFSET(ratio),     AV_OPT_TYPE_DOUBLE, {.dbl=2},               1,   20, A|F|R },
     { "attack",    "set attack",         OFFSET(attack),    AV_OPT_TYPE_DOUBLE, {.dbl=20},           0.01, 2000, A|F|R },
     { "release",   "set release",        OFFSET(release),   AV_OPT_TYPE_DOUBLE, {.dbl=250},          0.01, 9000, A|F|R },
     { "makeup",    "set make up gain",   OFFSET(makeup),    AV_OPT_TYPE_DOUBLE, {.dbl=1},               1,   64, A|F|R },
     { "knee",      "set knee",           OFFSET(knee),      AV_OPT_TYPE_DOUBLE, {.dbl=2.82843},         1,    8, A|F|R },
-    { "link",      "set link type",      OFFSET(link),      AV_OPT_TYPE_INT,    {.i64=0},               0,    1, A|F|R, "link" },
-    {   "average", 0,                    0,                 AV_OPT_TYPE_CONST,  {.i64=0},               0,    0, A|F|R, "link" },
-    {   "maximum", 0,                    0,                 AV_OPT_TYPE_CONST,  {.i64=1},               0,    0, A|F|R, "link" },
-    { "detection", "set detection",      OFFSET(detection), AV_OPT_TYPE_INT,    {.i64=1},               0,    1, A|F|R, "detection" },
-    {   "peak",    0,                    0,                 AV_OPT_TYPE_CONST,  {.i64=0},               0,    0, A|F|R, "detection" },
-    {   "rms",     0,                    0,                 AV_OPT_TYPE_CONST,  {.i64=1},               0,    0, A|F|R, "detection" },
+    { "link",      "set link type",      OFFSET(link),      AV_OPT_TYPE_INT,    {.i64=0},               0,    1, A|F|R, .unit = "link" },
+    {   "average", 0,                    0,                 AV_OPT_TYPE_CONST,  {.i64=0},               0,    0, A|F|R, .unit = "link" },
+    {   "maximum", 0,                    0,                 AV_OPT_TYPE_CONST,  {.i64=1},               0,    0, A|F|R, .unit = "link" },
+    { "detection", "set detection",      OFFSET(detection), AV_OPT_TYPE_INT,    {.i64=1},               0,    1, A|F|R, .unit = "detection" },
+    {   "peak",    0,                    0,                 AV_OPT_TYPE_CONST,  {.i64=0},               0,    0, A|F|R, .unit = "detection" },
+    {   "rms",     0,                    0,                 AV_OPT_TYPE_CONST,  {.i64=1},               0,    0, A|F|R, .unit = "detection" },
     { "level_sc",  "set sidechain gain", OFFSET(level_sc),  AV_OPT_TYPE_DOUBLE, {.dbl=1},        0.015625,   64, A|F|R },
     { "mix",       "set mix",            OFFSET(mix),       AV_OPT_TYPE_DOUBLE, {.dbl=1},               0,    1, A|F|R },
     { NULL }
@@ -177,13 +179,13 @@ static void compressor(SidechainCompressContext *s,
         abs_sample = fabs(scsrc[0] * level_sc);
 
         if (s->link == 1) {
-            for (c = 1; c < sclink->channels; c++)
+            for (c = 1; c < sclink->ch_layout.nb_channels; c++)
                 abs_sample = FFMAX(fabs(scsrc[c] * level_sc), abs_sample);
         } else {
-            for (c = 1; c < sclink->channels; c++)
+            for (c = 1; c < sclink->ch_layout.nb_channels; c++)
                 abs_sample += fabs(scsrc[c] * level_sc);
 
-            abs_sample /= sclink->channels;
+            abs_sample /= sclink->ch_layout.nb_channels;
         }
 
         if (s->detection)
@@ -206,12 +208,12 @@ static void compressor(SidechainCompressContext *s,
                                s->compressed_knee_stop,
                                s->detection, s->mode);
 
-        for (c = 0; c < inlink->channels; c++)
+        for (c = 0; c < inlink->ch_layout.nb_channels; c++)
             dst[c] = src[c] * level_in * (gain * makeup * mix + (1. - mix));
 
-        src += inlink->channels;
-        dst += inlink->channels;
-        scsrc += sclink->channels;
+        src += inlink->ch_layout.nb_channels;
+        dst += inlink->ch_layout.nb_channels;
+        scsrc += sclink->ch_layout.nb_channels;
     }
 }
 
@@ -325,8 +327,8 @@ static int config_output(AVFilterLink *outlink)
 
     outlink->time_base   = ctx->inputs[0]->time_base;
 
-    s->fifo[0] = av_audio_fifo_alloc(ctx->inputs[0]->format, ctx->inputs[0]->channels, 1024);
-    s->fifo[1] = av_audio_fifo_alloc(ctx->inputs[1]->format, ctx->inputs[1]->channels, 1024);
+    s->fifo[0] = av_audio_fifo_alloc(ctx->inputs[0]->format, ctx->inputs[0]->ch_layout.nb_channels, 1024);
+    s->fifo[1] = av_audio_fifo_alloc(ctx->inputs[1]->format, ctx->inputs[1]->ch_layout.nb_channels, 1024);
     if (!s->fifo[0] || !s->fifo[1])
         return AVERROR(ENOMEM);
 

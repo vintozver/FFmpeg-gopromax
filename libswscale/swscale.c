@@ -18,22 +18,20 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include <inttypes.h>
-#include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "libavutil/avassert.h"
-#include "libavutil/avutil.h"
 #include "libavutil/bswap.h"
+#include "libavutil/common.h"
 #include "libavutil/cpu.h"
-#include "libavutil/imgutils.h"
+#include "libavutil/emms.h"
 #include "libavutil/intreadwrite.h"
-#include "libavutil/mathematics.h"
+#include "libavutil/mem.h"
 #include "libavutil/mem_internal.h"
 #include "libavutil/pixdesc.h"
 #include "config.h"
-#include "rgb2rgb.h"
 #include "swscale_internal.h"
 #include "swscale.h"
 
@@ -594,14 +592,17 @@ void ff_sws_init_scale(SwsContext *c)
 {
     sws_init_swscale(c);
 
-    if (ARCH_PPC)
-        ff_sws_init_swscale_ppc(c);
-    if (ARCH_X86)
-        ff_sws_init_swscale_x86(c);
-    if (ARCH_AARCH64)
-        ff_sws_init_swscale_aarch64(c);
-    if (ARCH_ARM)
-        ff_sws_init_swscale_arm(c);
+#if ARCH_PPC
+    ff_sws_init_swscale_ppc(c);
+#elif ARCH_X86
+    ff_sws_init_swscale_x86(c);
+#elif ARCH_AARCH64
+    ff_sws_init_swscale_aarch64(c);
+#elif ARCH_ARM
+    ff_sws_init_swscale_arm(c);
+#elif ARCH_LOONGARCH64
+    ff_sws_init_swscale_loongarch(c);
+#endif
 }
 
 static void reset_ptr(const uint8_t *src[], enum AVPixelFormat format)
@@ -904,7 +905,8 @@ static int scale_internal(SwsContext *c,
 
     if ((srcSliceY  & (macro_height_src - 1)) ||
         ((srcSliceH & (macro_height_src - 1)) && srcSliceY + srcSliceH != c->srcH) ||
-        srcSliceY + srcSliceH > c->srcH) {
+        srcSliceY + srcSliceH > c->srcH ||
+        (isBayer(c->srcFormat) && srcSliceH <= 1)) {
         av_log(c, AV_LOG_ERROR, "Slice parameters %d, %d are invalid\n", srcSliceY, srcSliceH);
         return AVERROR(EINVAL);
     }

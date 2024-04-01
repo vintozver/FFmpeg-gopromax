@@ -24,10 +24,8 @@
 #include <stdatomic.h>
 
 #include "config.h"
-#include "version.h"
 
 #include "libavutil/avassert.h"
-#include "libavutil/avutil.h"
 #include "libavutil/common.h"
 #include "libavutil/frame.h"
 #include "libavutil/intreadwrite.h"
@@ -36,7 +34,10 @@
 #include "libavutil/pixfmt.h"
 #include "libavutil/pixdesc.h"
 #include "libavutil/slicethread.h"
+#if HAVE_ALTIVEC
 #include "libavutil/ppc/util_altivec.h"
+#endif
+#include "libavutil/half2float.h"
 
 #define STR(s) AV_TOSTRING(s) // AV_STRINGIFY is too long
 
@@ -561,26 +562,31 @@ typedef struct SwsContext {
     yuv2packedX_fn yuv2packedX;
     yuv2anyX_fn yuv2anyX;
 
+    /// Opaque data pointer passed to all input functions.
+    void *input_opaque;
+
     /// Unscaled conversion of luma plane to YV12 for horizontal scaler.
     void (*lumToYV12)(uint8_t *dst, const uint8_t *src, const uint8_t *src2, const uint8_t *src3,
-                      int width, uint32_t *pal);
+                      int width, uint32_t *pal, void *opq);
     /// Unscaled conversion of alpha plane to YV12 for horizontal scaler.
     void (*alpToYV12)(uint8_t *dst, const uint8_t *src, const uint8_t *src2, const uint8_t *src3,
-                      int width, uint32_t *pal);
+                      int width, uint32_t *pal, void *opq);
     /// Unscaled conversion of chroma planes to YV12 for horizontal scaler.
     void (*chrToYV12)(uint8_t *dstU, uint8_t *dstV,
                       const uint8_t *src1, const uint8_t *src2, const uint8_t *src3,
-                      int width, uint32_t *pal);
+                      int width, uint32_t *pal, void *opq);
 
     /**
      * Functions to read planar input, such as planar RGB, and convert
      * internally to Y/UV/A.
      */
     /** @{ */
-    void (*readLumPlanar)(uint8_t *dst, const uint8_t *src[4], int width, int32_t *rgb2yuv);
+    void (*readLumPlanar)(uint8_t *dst, const uint8_t *src[4], int width, int32_t *rgb2yuv,
+                          void *opq);
     void (*readChrPlanar)(uint8_t *dstU, uint8_t *dstV, const uint8_t *src[4],
-                          int width, int32_t *rgb2yuv);
-    void (*readAlpPlanar)(uint8_t *dst, const uint8_t *src[4], int width, int32_t *rgb2yuv);
+                          int width, int32_t *rgb2yuv, void *opq);
+    void (*readAlpPlanar)(uint8_t *dst, const uint8_t *src[4], int width, int32_t *rgb2yuv,
+                          void *opq);
     /** @} */
 
     /**
@@ -676,6 +682,8 @@ typedef struct SwsContext {
     unsigned int dst_slice_align;
     atomic_int   stride_unaligned_warned;
     atomic_int   data_unaligned_warned;
+
+    Half2FloatTables *h2f_tables;
 } SwsContext;
 //FIXME check init (where 0)
 
@@ -692,6 +700,7 @@ av_cold void ff_sws_init_range_convert(SwsContext *c);
 
 SwsFunc ff_yuv2rgb_init_x86(SwsContext *c);
 SwsFunc ff_yuv2rgb_init_ppc(SwsContext *c);
+SwsFunc ff_yuv2rgb_init_loongarch(SwsContext *c);
 
 static av_always_inline int is16BPS(enum AVPixelFormat pix_fmt)
 {
@@ -837,6 +846,13 @@ static av_always_inline int isFloat(enum AVPixelFormat pix_fmt)
     return desc->flags & AV_PIX_FMT_FLAG_FLOAT;
 }
 
+static av_always_inline int isFloat16(enum AVPixelFormat pix_fmt)
+{
+    const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(pix_fmt);
+    av_assert0(desc);
+    return (desc->flags & AV_PIX_FMT_FLAG_FLOAT) && desc->comp[0].depth == 16;
+}
+
 static av_always_inline int isALPHA(enum AVPixelFormat pix_fmt)
 {
     const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(pix_fmt);
@@ -970,6 +986,7 @@ void ff_sws_init_swscale_vsx(SwsContext *c);
 void ff_sws_init_swscale_x86(SwsContext *c);
 void ff_sws_init_swscale_aarch64(SwsContext *c);
 void ff_sws_init_swscale_arm(SwsContext *c);
+void ff_sws_init_swscale_loongarch(SwsContext *c);
 
 void ff_hyscale_fast_c(SwsContext *c, int16_t *dst, int dstWidth,
                        const uint8_t *src, int srcW, int xInc);
@@ -986,17 +1003,6 @@ void ff_hcscale_fast_mmxext(SwsContext *c, int16_t *dst1, int16_t *dst2,
                             int dstWidth, const uint8_t *src1,
                             const uint8_t *src2, int srcW, int xInc);
 
-/**
- * Allocate and return an SwsContext.
- * This is like sws_getContext() but does not perform the init step, allowing
- * the user to set additional AVOptions.
- *
- * @see sws_getContext()
- */
-struct SwsContext *sws_alloc_set_opts(int srcW, int srcH, enum AVPixelFormat srcFormat,
-                                      int dstW, int dstH, enum AVPixelFormat dstFormat,
-                                      int flags, const double *param);
-
 int ff_sws_alphablendaway(SwsContext *c, const uint8_t *src[],
                           int srcStride[], int srcSliceY, int srcSliceH,
                           uint8_t *dst[], int dstStride[]);
@@ -1004,28 +1010,20 @@ int ff_sws_alphablendaway(SwsContext *c, const uint8_t *src[],
 static inline void fillPlane16(uint8_t *plane, int stride, int width, int height, int y,
                                int alpha, int bits, const int big_endian)
 {
-    int i, j;
     uint8_t *ptr = plane + stride * y;
     int v = alpha ? 0xFFFF>>(16-bits) : (1<<(bits-1));
-    for (i = 0; i < height; i++) {
-#define FILL(wfunc) \
-        for (j = 0; j < width; j++) {\
-            wfunc(ptr+2*j, v);\
-        }
-        if (big_endian) {
-            FILL(AV_WB16);
-        } else {
-            FILL(AV_WL16);
-        }
+    if (big_endian != HAVE_BIGENDIAN)
+        v = av_bswap16(v);
+    for (int i = 0; i < height; i++) {
+        for (int j = 0; j < width; j++)
+            AV_WN16(ptr + 2 * j, v);
         ptr += stride;
     }
-#undef FILL
 }
 
 static inline void fillPlane32(uint8_t *plane, int stride, int width, int height, int y,
                                int alpha, int bits, const int big_endian, int is_float)
 {
-    int i, j;
     uint8_t *ptr = plane + stride * y;
     uint32_t v;
     uint32_t onef32 = 0x3f800000;
@@ -1033,20 +1031,14 @@ static inline void fillPlane32(uint8_t *plane, int stride, int width, int height
         v = alpha ? onef32 : 0;
     else
         v = alpha ? 0xFFFFFFFF>>(32-bits) : (1<<(bits-1));
+    if (big_endian != HAVE_BIGENDIAN)
+        v = av_bswap32(v);
 
-    for (i = 0; i < height; i++) {
-#define FILL(wfunc) \
-        for (j = 0; j < width; j++) {\
-            wfunc(ptr+4*j, v);\
-        }
-        if (big_endian) {
-            FILL(AV_WB32);
-        } else {
-            FILL(AV_WL32);
-        }
+    for (int i = 0; i < height; i++) {
+        for (int j = 0; j < width; j++)
+            AV_WN32(ptr + 4 * j, v);
         ptr += stride;
     }
-#undef FILL
 }
 
 
@@ -1144,5 +1136,5 @@ void ff_sws_slice_worker(void *priv, int jobnr, int threadnr,
 #define MAX_LINES_AHEAD 4
 
 //shuffle filter and filterPos for hyScale and hcScale filters in avx2
-void ff_shuffle_filter_coefficients(SwsContext *c, int* filterPos, int filterSize, int16_t *filter, int dstW);
+int ff_shuffle_filter_coefficients(SwsContext *c, int* filterPos, int filterSize, int16_t *filter, int dstW);
 #endif /* SWSCALE_SWSCALE_INTERNAL_H */

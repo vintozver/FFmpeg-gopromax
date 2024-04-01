@@ -22,9 +22,11 @@
 
 #include "libavutil/avstring.h"
 #include "libavutil/channel_layout.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "audio.h"
 #include "avfilter.h"
+#include "formats.h"
 #include "internal.h"
 
 typedef struct ASRContext {
@@ -131,7 +133,7 @@ static int query_formats(AVFilterContext *ctx)
 
     if ((ret = ff_add_format                 (&formats, AV_SAMPLE_FMT_S16                 )) < 0 ||
         (ret = ff_set_common_formats         (ctx     , formats                           )) < 0 ||
-        (ret = ff_add_channel_layout         (&layout , AV_CH_LAYOUT_MONO                 )) < 0 ||
+        (ret = ff_add_channel_layout         (&layout , &(AVChannelLayout)AV_CHANNEL_LAYOUT_MONO )) < 0 ||
         (ret = ff_set_common_channel_layouts (ctx     , layout                            )) < 0 ||
         (ret = ff_set_common_samplerates_from_list(ctx, sample_rates     )) < 0)
         return ret;
@@ -158,13 +160,6 @@ static const AVFilterPad asr_inputs[] = {
     },
 };
 
-static const AVFilterPad asr_outputs[] = {
-    {
-        .name = "default",
-        .type = AVMEDIA_TYPE_AUDIO,
-    },
-};
-
 const AVFilter ff_af_asr = {
     .name          = "asr",
     .description   = NULL_IF_CONFIG_SMALL("Automatic Speech Recognition."),
@@ -174,6 +169,6 @@ const AVFilter ff_af_asr = {
     .uninit        = asr_uninit,
     .flags         = AVFILTER_FLAG_METADATA_ONLY,
     FILTER_INPUTS(asr_inputs),
-    FILTER_OUTPUTS(asr_outputs),
+    FILTER_OUTPUTS(ff_audio_default_filterpad),
     FILTER_QUERY_FUNC(query_formats),
 };
